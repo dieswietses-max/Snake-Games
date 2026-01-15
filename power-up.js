@@ -170,6 +170,7 @@ function wrapEntitiesToBounds() {
     if (diamondFood) diamondFood = wrapPoint(diamondFood);
     if (sapphireFood) sapphireFood = wrapPoint(sapphireFood);
     if (bronzeFood) bronzeFood = wrapPoint(bronzeFood);
+    powerUps = powerUps.map(wrapPoint);
     portals = portals.map(p => ({ a: wrapPoint(p.a), b: wrapPoint(p.b), endTime: p.endTime }));
 }
 
@@ -575,6 +576,21 @@ function update() {
         updatePowerUpUI();
     }
 
+    // Magnet pulls in power-ups nearby for green
+    if (activePowerUpGreen && activePowerUpGreen.type === 'magnet') {
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            if (manhattan(head, powerUps[i]) <= MAGNET_RADIUS) {
+                const picked = powerUps.splice(i, 1)[0];
+                if (picked.type === 'portal') {
+                    spawnPortalPair();
+                } else {
+                    activePowerUpGreen = { type: picked.type, endTime: Date.now() + POWER_UP_DURATION };
+                }
+                updatePowerUpUI();
+            }
+        }
+    }
+
     if (pendingGrowthGreen > 0) {
         pendingGrowthGreen -= 1;
     } else {
@@ -688,6 +704,21 @@ function update() {
             activePowerUpRed = { type: picked.type, endTime: Date.now() + POWER_UP_DURATION };
         }
         updatePowerUpUI();
+    }
+
+    // Magnet pulls in power-ups nearby for red
+    if (activePowerUpRed && activePowerUpRed.type === 'magnet') {
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            if (manhattan(headRed, powerUps[i]) <= MAGNET_RADIUS) {
+                const picked = powerUps.splice(i, 1)[0];
+                if (picked.type === 'portal') {
+                    spawnPortalPair();
+                } else {
+                    activePowerUpRed = { type: picked.type, endTime: Date.now() + POWER_UP_DURATION };
+                }
+                updatePowerUpUI();
+            }
+        }
     }
 
     if (pendingGrowthRed > 0) {
@@ -967,11 +998,16 @@ function maybeSpawnPowerUps(now) {
     if (now - lastPowerUpSpawn >= powerUpSpawnInterval) {
         const types = ['invincibility', 'magnet', 'ghost', 'portal'];
         const randomType = types[Math.floor(Math.random() * types.length)];
-        const newPowerUp = {
-            x: Math.floor(Math.random() * tileCountX),
-            y: Math.floor(Math.random() * tileCountY),
-            type: randomType
-        };
+        let newPowerUp;
+        let attempts = 0;
+        do {
+            newPowerUp = {
+                x: Math.floor(Math.random() * tileCountX),
+                y: Math.floor(Math.random() * tileCountY),
+                type: randomType
+            };
+            attempts++;
+        } while (attempts < 40 && isOccupied(newPowerUp.x, newPowerUp.y));
         powerUps.push(newPowerUp);
         lastPowerUpSpawn = now;
     }
