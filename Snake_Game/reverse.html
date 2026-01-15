@@ -3,17 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Snake Game - Apocalypse</title>
+    <title>Snake Game - Reverse</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container">
-        <h1>Snake Apocalypse</h1>
+        <h1>Snake Reverse</h1>
         <div class="mode-selector">
             <span>Game Mode:</span>
             <a href="index.html"><button class="mode-btn">Classic</button></a>
             <a href="dual-player.html"><button class="mode-btn">Dual Player</button></a>
-            <button class="mode-btn active">Apocalypse</button>
+            <a href="apocalypse.html"><button class="mode-btn">Apocalypse</button></a>
             <a href="time-attack.html"><button class="mode-btn">Time Attack</button></a>
             <a href="speed-rush.html"><button class="mode-btn">Speed Rush</button></a>
             <a href="maze-runner.html"><button class="mode-btn">Maze Runner</button></a>
@@ -21,10 +21,10 @@
             <a href="portal.html"><button class="mode-btn">Portal</button></a>
             <a href="survival.html"><button class="mode-btn">Survival</button></a>
             <a href="power-up.html"><button class="mode-btn">Power Duel</button></a>
-            <a href="reverse.html"><button class="mode-btn">Reverse</button></a>
+            <button class="mode-btn active">Reverse</button>
         </div>
         <div style="font-size: 0.9em; color: #b8c5ff; margin-bottom: 12px; text-align: center;">
-            <strong>Apocalypse:</strong> Survive enemy AI snakes. Kill them by running into them. Enemies spawn every 15s and get faster with your score.
+            <strong>Reverse:</strong> Eating food SHRINKS you! Start at length 10. Balance scoring with survival as you shrink.
         </div>
         <div class="controls">
             <button id="startBtn">Start</button>
@@ -35,12 +35,12 @@
             <div class="score-center">
                 <div>Score: <span id="score">0</span></div>
                 <div>High Score: <span id="highScore">0</span></div>
-                <div>Enemy Snakes: <span id="enemyCount">0</span></div>
+                <div>Length: <span id="snakeLength">10</span></div>
                 <div id="gameOver" class="hidden">Game Over! Score: <span id="finalScore">0</span></div>
             </div>
         </div>
         <canvas id="gameCanvas"></canvas>
     </div>
-    <script src="apocalypse.js"></script>
+    <script src="reverse.js"></script>
 </body>
 </html>

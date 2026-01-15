@@ -122,15 +122,16 @@ canvas {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 14px;
     font-size: 0.95em;
     color: #dfe6ff;
 }
 
 .mode-btn {
-    padding: 8px 16px;
-    font-size: 0.9em;
+    padding: 6px 12px;
+    font-size: 0.85em;
     background: linear-gradient(135deg, rgba(90, 214, 255, 0.3), rgba(95, 139, 255, 0.3));
     color: #5ad6ff;
     border: 1px solid rgba(90, 214, 255, 0.5);
