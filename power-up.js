@@ -10,11 +10,13 @@ const resetBtn = document.getElementById('resetBtn');
 const pauseBtn = document.getElementById('pauseBtn');
 const scoreRedDisplay = document.getElementById('scoreRed');
 const finalScoreRedDisplay = document.getElementById('finalScoreRed');
+const activeGreenEl = document.getElementById('activeGreen');
+const activeRedEl = document.getElementById('activeRed');
 
 // Game variables
 const gridSize = 20;
 const maxFoodPerColor = 5;
-const normalFoodSpawnCooldown = 1100; // ms between spawn attempts per color
+const normalFoodSpawnCooldown = 367; // ms between spawn attempts per color (3x faster)
 const normalFoodSpawnChance = 0.25;  // chance per attempt when under cap
 const maxTotalFood = 25;             // overall visible food cap
 const sapphireSpawnChance = 0.01;    // chance to spawn sapphire when triggered
@@ -45,7 +47,11 @@ let pendingGrowthRed = 0;
 let powerUps = []; // Active power-ups on map
 let activePowerUpGreen = null; // Green snake active power-up: {type, endTime}
 let activePowerUpRed = null; // Red snake active power-up: {type, endTime}
-const powerUpSpawnInterval = 8000; // Spawn every 8 seconds
+const powerUpSpawnInterval = 2667; // Spawn every ~2.7 seconds (3x faster)
+const POWER_UP_DURATION = 10000; // 10 seconds active time
+const MAGNET_RADIUS = 2; // tiles (Manhattan distance)
+const PORTAL_DURATION = 10000; // portals last 10s on the field
+const PORTAL_TELEPORT_COOLDOWN = 200; // ms to prevent re-teleporting instantly
 let lastPowerUpSpawn = 0;
 let score = localStorage.getItem('powerUpWinsGreen') ? parseInt(localStorage.getItem('powerUpWinsGreen')) : 0;
 let scoreRed = localStorage.getItem('powerUpWinsRed') ? parseInt(localStorage.getItem('powerUpWinsRed')) : 0;
@@ -54,10 +60,63 @@ let gameRunning = false;
 let gameOver = false;
 let gamePaused = false;
 let gameSpeed = 150;
+let gameStartTime = 0;
+let portals = []; // active portal pairs: { a:{x,y}, b:{x,y}, endTime }
+let portalCooldownGreen = 0;
+let portalCooldownRed = 0;
 
 scoreDisplay.textContent = score;
 scoreRedDisplay.textContent = scoreRed;
 highScoreDisplay.textContent = highScore;
+
+function powerUpName(t) {
+    if (!t) return 'None';
+    switch (t) {
+        case 'invincibility': return 'Invincibility';
+        case 'magnet': return 'Magnet';
+        case 'ghost': return 'Ghost';
+        default: return 'Unknown';
+    }
+}
+
+function updatePowerUpUI(nowTs = Date.now()) {
+    if (activeGreenEl) {
+        if (activePowerUpGreen) {
+            const ms = Math.max(0, activePowerUpGreen.endTime - nowTs);
+            const secs = (ms / 1000).toFixed(1);
+            activeGreenEl.textContent = `${powerUpName(activePowerUpGreen.type)} (${secs}s)`;
+        } else {
+            activeGreenEl.textContent = 'None';
+        }
+    }
+    if (activeRedEl) {
+        if (activePowerUpRed) {
+            const ms = Math.max(0, activePowerUpRed.endTime - nowTs);
+            const secs = (ms / 1000).toFixed(1);
+            activeRedEl.textContent = `${powerUpName(activePowerUpRed.type)} (${secs}s)`;
+        } else {
+            activeRedEl.textContent = 'None';
+        }
+    }
+}
+
+function isPhaseActiveGreen() {
+    return (
+        activePowerUpGreen &&
+        (activePowerUpGreen.type === 'invincibility' || activePowerUpGreen.type === 'ghost')
+    );
+}
+
+function isPhaseActiveRed() {
+    return (
+        activePowerUpRed &&
+        (activePowerUpRed.type === 'invincibility' || activePowerUpRed.type === 'ghost')
+    );
+}
+
+function manhattan(a, b) {
+    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
 
 // Event listeners
 startBtn.addEventListener('click', () => {
@@ -111,6 +170,7 @@ function wrapEntitiesToBounds() {
     if (diamondFood) diamondFood = wrapPoint(diamondFood);
     if (sapphireFood) sapphireFood = wrapPoint(sapphireFood);
     if (bronzeFood) bronzeFood = wrapPoint(bronzeFood);
+    portals = portals.map(p => ({ a: wrapPoint(p.a), b: wrapPoint(p.b), endTime: p.endTime }));
 }
 
 function handleKeyPress(e) {
@@ -170,6 +230,7 @@ function startGame() {
     gamePaused = false;
     pauseBtn.textContent = 'Pause';
     gameOverDisplay.classList.add('hidden');
+    gameStartTime = Date.now();
     gameLoop();
 }
 
@@ -213,6 +274,7 @@ function resetGame(clearScores = false) {
     scoreRedDisplay.textContent = scoreRed;
     highScoreDisplay.textContent = highScore;
     gameSpeed = 150;
+    gameStartTime = Date.now();
     goldenFood = null;
     diamondFood = null;
     sapphireFood = null;
@@ -227,11 +289,20 @@ function resetGame(clearScores = false) {
     activePowerUpGreen = null;
     activePowerUpRed = null;
     lastPowerUpSpawn = 0;
+    portals = [];
+    portalCooldownGreen = 0;
+    portalCooldownRed = 0;
     draw();
 }
 
 function isOccupied(x, y) {
-    const occupied = [...snake, ...snakeRed, ...greenFoods, ...redFoods];
+    const occupied = [
+        ...snake,
+        ...snakeRed,
+        ...greenFoods,
+        ...redFoods,
+        ...portals.flatMap(p => [p.a, p.b])
+    ];
     if (goldenFood) occupied.push(goldenFood);
     if (diamondFood) occupied.push(diamondFood);
     if (sapphireFood) occupied.push(sapphireFood);
@@ -390,26 +461,47 @@ function update() {
     maybeSpawnNormalFoods(now);
     maybeSpawnPowerUps(now);
     updateActivePowerUps(now);
+    updatePortals(now);
+    updatePowerUpUI(now);
 
     // --- Green snake move ---
     direction = nextDirection;
     let headX = (snake[0].x + direction.x + tileCountX) % tileCountX;
     let headY = (snake[0].y + direction.y + tileCountY) % tileCountY;
-    const head = { x: headX, y: headY };
+    let head = { x: headX, y: headY };
+    // Teleport via portals for green (before collision checks)
+    if (now >= portalCooldownGreen) {
+        for (const pr of portals) {
+            if (head.x === pr.a.x && head.y === pr.a.y) {
+                head = { x: pr.b.x, y: pr.b.y };
+                portalCooldownGreen = now + PORTAL_TELEPORT_COOLDOWN;
+                break;
+            }
+            if (head.x === pr.b.x && head.y === pr.b.y) {
+                head = { x: pr.a.x, y: pr.a.y };
+                portalCooldownGreen = now + PORTAL_TELEPORT_COOLDOWN;
+                break;
+            }
+        }
+    }
 
     // Collision with red snake (red wins)
     for (let segment of snakeRed) {
         if (head.x === segment.x && head.y === segment.y) {
-            endGame('Red');
-            return;
+            if (!isPhaseActiveGreen()) {
+                endGame('Red');
+                return;
+            } // else: pass through
         }
     }
 
     // Self collision green
     for (let segment of snake) {
         if (head.x === segment.x && head.y === segment.y) {
-            endGame('Red');
-            return;
+            if (!isPhaseActiveGreen()) {
+                endGame('Red');
+                return;
+            }
         }
     }
     snake.unshift(head);
@@ -419,6 +511,37 @@ function update() {
     if (greenIdx !== -1) {
         pendingGrowthGreen += 1;
         greenFoods.splice(greenIdx, 1);
+        maybeSpawnGoldenFood();
+        maybeSpawnDiamondFood();
+        maybeSpawnSapphireFood();
+        maybeSpawnBronzeFood();
+    }
+    // Magnet: auto-collect adjacent foods for green
+    if (activePowerUpGreen && activePowerUpGreen.type === 'magnet') {
+        // Normal foods
+        for (let i = greenFoods.length - 1; i >= 0; i--) {
+            if (manhattan(head, greenFoods[i]) <= MAGNET_RADIUS) {
+                pendingGrowthGreen += 1;
+                greenFoods.splice(i, 1);
+            }
+        }
+        for (let i = redFoods.length - 1; i >= 0; i--) {
+            if (manhattan(head, redFoods[i]) <= MAGNET_RADIUS) {
+                pendingGrowthGreen += 1;
+                redFoods.splice(i, 1);
+            }
+        }
+        // Specials
+        if (goldenFood && manhattan(head, goldenFood) <= MAGNET_RADIUS) { pendingGrowthGreen += 5; goldenFood = null; }
+        if (diamondFood && manhattan(head, diamondFood) <= MAGNET_RADIUS) { pendingGrowthGreen += 10; diamondFood = null; }
+        if (sapphireFood && manhattan(head, sapphireFood) <= MAGNET_RADIUS) { pendingGrowthGreen += 25; sapphireFood = null; }
+        if (bronzeFood && manhattan(head, bronzeFood) <= MAGNET_RADIUS) { pendingGrowthGreen += 3; bronzeFood = null; }
+    }
+    // Also allow eating red food
+    const redOnGreenIdx = redFoods.findIndex(f => f.x === head.x && f.y === head.y);
+    if (redOnGreenIdx !== -1) {
+        pendingGrowthGreen += 1;
+        redFoods.splice(redOnGreenIdx, 1);
         maybeSpawnGoldenFood();
         maybeSpawnDiamondFood();
         maybeSpawnSapphireFood();
@@ -440,6 +563,18 @@ function update() {
         pendingGrowthGreen += 3;
         bronzeFood = null;
     }
+    // Power-up pickup for green
+    const puIdxGreen = powerUps.findIndex(p => p.x === head.x && p.y === head.y);
+    if (puIdxGreen !== -1) {
+        const picked = powerUps.splice(puIdxGreen, 1)[0];
+        if (picked.type === 'portal') {
+            spawnPortalPair();
+        } else {
+            activePowerUpGreen = { type: picked.type, endTime: Date.now() + POWER_UP_DURATION };
+        }
+        updatePowerUpUI();
+    }
+
     if (pendingGrowthGreen > 0) {
         pendingGrowthGreen -= 1;
     } else {
@@ -450,21 +585,40 @@ function update() {
     directionRed = nextDirectionRed;
     let headRedX = (snakeRed[0].x + directionRed.x + tileCountX) % tileCountX;
     let headRedY = (snakeRed[0].y + directionRed.y + tileCountY) % tileCountY;
-    const headRed = { x: headRedX, y: headRedY };
+    let headRed = { x: headRedX, y: headRedY };
+    // Teleport via portals for red (before collision checks)
+    if (now >= portalCooldownRed) {
+        for (const pr of portals) {
+            if (headRed.x === pr.a.x && headRed.y === pr.a.y) {
+                headRed = { x: pr.b.x, y: pr.b.y };
+                portalCooldownRed = now + PORTAL_TELEPORT_COOLDOWN;
+                break;
+            }
+            if (headRed.x === pr.b.x && headRed.y === pr.b.y) {
+                headRed = { x: pr.a.x, y: pr.a.y };
+                portalCooldownRed = now + PORTAL_TELEPORT_COOLDOWN;
+                break;
+            }
+        }
+    }
 
     // Collision with green snake (green wins)
     for (let segment of snake) {
         if (headRed.x === segment.x && headRed.y === segment.y) {
-            endGame('Green');
-            return;
+            if (!isPhaseActiveRed()) {
+                endGame('Green');
+                return;
+            }
         }
     }
 
     // Self collision red
     for (let segment of snakeRed) {
         if (headRed.x === segment.x && headRed.y === segment.y) {
-            endGame('Green');
-            return;
+            if (!isPhaseActiveRed()) {
+                endGame('Green');
+                return;
+            }
         }
     }
     snakeRed.unshift(headRed);
@@ -474,6 +628,35 @@ function update() {
     if (redIdx !== -1) {
         pendingGrowthRed += 1;
         redFoods.splice(redIdx, 1);
+        maybeSpawnGoldenFood();
+        maybeSpawnDiamondFood();
+        maybeSpawnSapphireFood();
+        maybeSpawnBronzeFood();
+    }
+    // Magnet: auto-collect adjacent foods for red
+    if (activePowerUpRed && activePowerUpRed.type === 'magnet') {
+        for (let i = redFoods.length - 1; i >= 0; i--) {
+            if (manhattan(headRed, redFoods[i]) <= MAGNET_RADIUS) {
+                pendingGrowthRed += 1;
+                redFoods.splice(i, 1);
+            }
+        }
+        for (let i = greenFoods.length - 1; i >= 0; i--) {
+            if (manhattan(headRed, greenFoods[i]) <= MAGNET_RADIUS) {
+                pendingGrowthRed += 1;
+                greenFoods.splice(i, 1);
+            }
+        }
+        if (goldenFood && manhattan(headRed, goldenFood) <= MAGNET_RADIUS) { pendingGrowthRed += 5; goldenFood = null; }
+        if (diamondFood && manhattan(headRed, diamondFood) <= MAGNET_RADIUS) { pendingGrowthRed += 10; diamondFood = null; }
+        if (sapphireFood && manhattan(headRed, sapphireFood) <= MAGNET_RADIUS) { pendingGrowthRed += 25; sapphireFood = null; }
+        if (bronzeFood && manhattan(headRed, bronzeFood) <= MAGNET_RADIUS) { pendingGrowthRed += 3; bronzeFood = null; }
+    }
+    // Also allow eating green food
+    const greenOnRedIdx = greenFoods.findIndex(f => f.x === headRed.x && f.y === headRed.y);
+    if (greenOnRedIdx !== -1) {
+        pendingGrowthRed += 1;
+        greenFoods.splice(greenOnRedIdx, 1);
         maybeSpawnGoldenFood();
         maybeSpawnDiamondFood();
         maybeSpawnSapphireFood();
@@ -495,6 +678,18 @@ function update() {
         pendingGrowthRed += 3;
         bronzeFood = null;
     }
+    // Power-up pickup for red
+    const puIdxRed = powerUps.findIndex(p => p.x === headRed.x && p.y === headRed.y);
+    if (puIdxRed !== -1) {
+        const picked = powerUps.splice(puIdxRed, 1)[0];
+        if (picked.type === 'portal') {
+            spawnPortalPair();
+        } else {
+            activePowerUpRed = { type: picked.type, endTime: Date.now() + POWER_UP_DURATION };
+        }
+        updatePowerUpUI();
+    }
+
     if (pendingGrowthRed > 0) {
         pendingGrowthRed -= 1;
     } else {
@@ -694,8 +889,35 @@ function draw() {
             ctx.lineTo(cx - gridSize / 2.3, cy + gridSize / 3);
             ctx.closePath();
             ctx.fill();
+        } else if (powerUp.type === 'portal') {
+            // Purple ring
+            ctx.shadowColor = '#b388ff';
+            ctx.shadowBlur = 15;
+            ctx.strokeStyle = '#b388ff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(cx, cy, gridSize / 2.5, 0, Math.PI * 2);
+            ctx.stroke();
         }
         ctx.shadowColor = 'transparent';
+    });
+
+    // Active portals (pairs)
+    portals.forEach(p => {
+        const drawRing = (pt, color) => {
+            const cx = pt.x * gridSize + gridSize / 2;
+            const cy = pt.y * gridSize + gridSize / 2;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 12;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(cx, cy, gridSize / 2.3, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.shadowColor = 'transparent';
+        };
+        drawRing(p.a, '#7df2ff');
+        drawRing(p.b, '#b388ff');
     });
 
     // Grid
@@ -743,7 +965,7 @@ function endGame(winner = '') {
 function maybeSpawnPowerUps(now) {
     // Spawn power-ups every 8 seconds
     if (now - lastPowerUpSpawn >= powerUpSpawnInterval) {
-        const types = ['invincibility', 'magnet', 'ghost'];
+        const types = ['invincibility', 'magnet', 'ghost', 'portal'];
         const randomType = types[Math.floor(Math.random() * types.length)];
         const newPowerUp = {
             x: Math.floor(Math.random() * tileCountX),
@@ -763,13 +985,37 @@ function updateActivePowerUps(now) {
     if (activePowerUpRed && now > activePowerUpRed.endTime) {
         activePowerUpRed = null;
     }
+    updatePowerUpUI(now);
+}
+
+function spawnPortalPair() {
+    // Find two distinct unoccupied tiles
+    let a, b;
+    let attempts = 0;
+    do {
+        a = { x: Math.floor(Math.random() * tileCountX), y: Math.floor(Math.random() * tileCountY) };
+        b = { x: Math.floor(Math.random() * tileCountX), y: Math.floor(Math.random() * tileCountY) };
+        attempts++;
+    } while (attempts < 100 && (
+        (a.x === b.x && a.y === b.y) ||
+        isOccupied(a.x, a.y) ||
+        isOccupied(b.x, b.y)
+    ));
+    portals.push({ a, b, endTime: Date.now() + PORTAL_DURATION });
+}
+
+function updatePortals(now) {
+    portals = portals.filter(p => p.endTime > now);
 }
 
 function gameLoop() {
     update();
     draw();
     if (gameRunning) {
-        setTimeout(gameLoop, gameSpeed);
+        const elapsed = Date.now() - gameStartTime;
+        const speedBoost = Math.floor(elapsed / 10000) * 5; // +5ms faster every 10s
+        const delay = Math.max(70, gameSpeed - speedBoost);
+        setTimeout(gameLoop, delay);
     }
 }
 

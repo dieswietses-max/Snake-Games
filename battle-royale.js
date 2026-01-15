@@ -40,6 +40,13 @@ let gameSpeed = 150;
 let shrinkZone = 0; // How many tiles have been removed from each edge
 let lastShrink = 0;
 const shrinkInterval = 30000; // 30 seconds
+let aiSnakes = [];
+const aiColors = [
+    { head: '#00bfff', body: '#0099cc' },
+    { head: '#ff8800', body: '#cc6d00' },
+    { head: '#bb66ff', body: '#9952cc' }
+];
+let pointDrops = [];
 
 scoreDisplay.textContent = score;
 highScoreDisplay.textContent = highScore;
@@ -86,7 +93,12 @@ function wrapEntitiesToBounds() {
         y: ((y % tileCountY) + tileCountY) % tileCountY
     });
     snake = snake.map(wrapPoint);
+    aiSnakes = aiSnakes.map(ai => ({
+        ...ai,
+        body: ai.body.map(wrapPoint)
+    }));
     foods = foods.map(wrapPoint);
+    pointDrops = pointDrops.map(wrapPoint);
     if (goldenFood) goldenFood = wrapPoint(goldenFood);
     if (diamondFood) diamondFood = wrapPoint(diamondFood);
     if (sapphireFood) sapphireFood = wrapPoint(sapphireFood);
@@ -171,16 +183,138 @@ function resetGame(clearScores = false) {
     lastFoodSpawn = 0;
     shrinkZone = 0;
     lastShrink = Date.now();
+    pointDrops = [];
+    spawnAiSnakes();
     draw();
 }
 
 function isOccupied(x, y) {
-    const occupied = [...snake, ...foods];
+    const occupied = [
+        ...snake,
+        ...foods,
+        ...aiSnakes.filter(ai => ai.alive).flatMap(ai => ai.body),
+        ...pointDrops
+    ];
     if (goldenFood) occupied.push(goldenFood);
     if (diamondFood) occupied.push(diamondFood);
     if (sapphireFood) occupied.push(sapphireFood);
     if (bronzeFood) occupied.push(bronzeFood);
     return occupied.some(item => item.x === x && item.y === y);
+}
+
+function spawnAiSnakes() {
+    aiSnakes = [];
+    const desired = aiColors.length;
+    let attempts = 0;
+    while (aiSnakes.length < desired && attempts < 100) {
+        attempts += 1;
+        const candidate = {
+            x: Math.floor(Math.random() * (tileCountX || 40)),
+            y: Math.floor(Math.random() * (tileCountY || 30))
+        };
+        if (!isOccupied(candidate.x, candidate.y)) {
+            const idx = aiSnakes.length;
+            aiSnakes.push({
+                body: [candidate],
+                direction: randomDirection(),
+                nextDirection: { x: 1, y: 0 },
+                color: aiColors[idx],
+                pendingGrowth: 0,
+                alive: true
+            });
+        }
+    }
+}
+
+function randomDirection() {
+    const dirs = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 }
+    ];
+    return dirs[Math.floor(Math.random() * dirs.length)];
+}
+
+function getAllFoodPoints() {
+    const list = [...foods];
+    if (goldenFood) list.push(goldenFood);
+    if (diamondFood) list.push(diamondFood);
+    if (sapphireFood) list.push(sapphireFood);
+    if (bronzeFood) list.push(bronzeFood);
+    return list;
+}
+
+function manhattan(a, b) {
+    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function safeForAi(ai, point) {
+    if (isInDeathZone(point.x, point.y)) return false;
+    if (snake.some(seg => seg.x === point.x && seg.y === point.y)) return false;
+    if (ai.body.some(seg => seg.x === point.x && seg.y === point.y)) return false;
+    if (aiSnakes.some(other => other !== ai && other.alive && other.body.some(seg => seg.x === point.x && seg.y === point.y))) return false;
+    return true;
+}
+
+function pickAiDirection(ai) {
+    const head = ai.body[0];
+    const dirs = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 }
+    ].filter(d => !(d.x === -ai.direction.x && d.y === -ai.direction.y));
+
+    const foodsList = getAllFoodPoints();
+    const target = foodsList.length
+        ? foodsList.reduce((best, f) => {
+            const dist = manhattan(head, f);
+            return dist < best.dist ? { point: f, dist } : best;
+        }, { point: { x: Math.floor(tileCountX / 2), y: Math.floor(tileCountY / 2) }, dist: Infinity }).point
+        : { x: Math.floor(tileCountX / 2), y: Math.floor(tileCountY / 2) };
+
+    const scoreDir = (dir) => {
+        const next = {
+            x: (head.x + dir.x + tileCountX) % tileCountX,
+            y: (head.y + dir.y + tileCountY) % tileCountY
+        };
+        if (!safeForAi(ai, next)) return -Infinity;
+
+        // Prefer moving toward target, away from death zone
+        const distTarget = manhattan(next, target);
+        const borderPenalty = Math.max(0, shrinkZone - Math.min(
+            next.x,
+            next.y,
+            tileCountX - 1 - next.x,
+            tileCountY - 1 - next.y
+        ));
+        const jitter = Math.random() * 0.3; // avoid perfect predictability
+        return -distTarget - borderPenalty + jitter;
+    };
+
+    let best = dirs[0];
+    let bestScore = -Infinity;
+    dirs.forEach(d => {
+        const s = scoreDir(d);
+        if (s > bestScore) {
+            bestScore = s;
+            best = d;
+        }
+    });
+
+    // Fallback: keep current direction if nothing is safe
+    if (bestScore === -Infinity) return ai.direction;
+    return best;
+}
+
+function isInDeathZone(x, y) {
+    return (
+        x < shrinkZone ||
+        x >= tileCountX - shrinkZone ||
+        y < shrinkZone ||
+        y >= tileCountY - shrinkZone
+    );
 }
 
 function getTotalFoodCount() {
@@ -190,6 +324,11 @@ function getTotalFoodCount() {
     if (sapphireFood) count += 1;
     if (bronzeFood) count += 1;
     return count;
+}
+
+function awardAiDeath(ai) {
+    // Drop one point item per body segment at the segment's location
+    pointDrops.push(...ai.body.map(seg => ({ x: seg.x, y: seg.y })));
 }
 
 function generateFood() {
@@ -316,8 +455,12 @@ function update() {
     const head = { x: headX, y: headY };
     
     // Check if in death zone
-    if (head.x < shrinkZone || head.x >= tileCountX - shrinkZone ||
-        head.y < shrinkZone || head.y >= tileCountY - shrinkZone) {
+    if (isInDeathZone(head.x, head.y)) {
+        endGame();
+        return;
+    }
+
+    if (aiSnakes.some(ai => ai.alive && ai.body.some(seg => seg.x === head.x && seg.y === head.y))) {
         endGame();
         return;
     }
@@ -367,11 +510,95 @@ function update() {
         scoreDisplay.textContent = score;
     }
 
+    // Pick up point drops
+    const dropIdx = pointDrops.findIndex(p => p.x === head.x && p.y === head.y);
+    if (dropIdx !== -1) {
+        score += 1;
+        pointDrops.splice(dropIdx, 1);
+        scoreDisplay.textContent = score;
+    }
+
     if (pendingGrowth > 0) {
         pendingGrowth -= 1;
     } else {
         snake.pop();
     }
+
+    updateAiSnakes();
+}
+
+function updateAiSnakes() {
+    aiSnakes.forEach(ai => {
+        if (!ai.alive) return;
+
+        ai.direction = pickAiDirection(ai);
+        const head = ai.body[0];
+        const next = {
+            x: (head.x + ai.direction.x + tileCountX) % tileCountX,
+            y: (head.y + ai.direction.y + tileCountY) % tileCountY
+        };
+
+        if (isInDeathZone(next.x, next.y)) {
+            ai.alive = false;
+            awardAiDeath(ai);
+            return;
+        }
+
+        if (snake.some(seg => seg.x === next.x && seg.y === next.y)) {
+            ai.alive = false;
+            awardAiDeath(ai);
+            return;
+        }
+
+        if (aiSnakes.some(other => other !== ai && other.alive && other.body.some(seg => seg.x === next.x && seg.y === next.y))) {
+            ai.alive = false;
+            awardAiDeath(ai);
+            return;
+        }
+
+        for (let i = 0; i < ai.body.length; i++) {
+            if (ai.body[i].x === next.x && ai.body[i].y === next.y) {
+                ai.alive = false;
+                awardAiDeath(ai);
+                return;
+            }
+        }
+
+        ai.body.unshift(next);
+
+        const foodIdx = foods.findIndex(f => f.x === next.x && f.y === next.y);
+        if (foodIdx !== -1) {
+            foods.splice(foodIdx, 1);
+            ai.pendingGrowth = (ai.pendingGrowth || 0) + 1;
+        }
+        // Pick up point drops (remove only)
+        const dropIdx = pointDrops.findIndex(p => p.x === next.x && p.y === next.y);
+        if (dropIdx !== -1) {
+            pointDrops.splice(dropIdx, 1);
+        }
+        if (goldenFood && next.x === goldenFood.x && next.y === goldenFood.y) {
+            goldenFood = null;
+            ai.pendingGrowth = (ai.pendingGrowth || 0) + 3;
+        }
+        if (diamondFood && next.x === diamondFood.x && next.y === diamondFood.y) {
+            diamondFood = null;
+            ai.pendingGrowth = (ai.pendingGrowth || 0) + 5;
+        }
+        if (sapphireFood && next.x === sapphireFood.x && next.y === sapphireFood.y) {
+            sapphireFood = null;
+            ai.pendingGrowth = (ai.pendingGrowth || 0) + 8;
+        }
+        if (bronzeFood && next.x === bronzeFood.x && next.y === bronzeFood.y) {
+            bronzeFood = null;
+            ai.pendingGrowth = (ai.pendingGrowth || 0) + 2;
+        }
+
+        if (ai.pendingGrowth > 0) {
+            ai.pendingGrowth -= 1;
+        } else {
+            ai.body.pop();
+        }
+    });
 }
 
 function draw() {
@@ -401,6 +628,39 @@ function draw() {
             gridSize - 2,
             gridSize - 2
         );
+    });
+
+    aiSnakes.forEach(ai => {
+        if (!ai.alive) return;
+        ai.body.forEach((segment, index) => {
+            ctx.fillStyle = index === 0 ? ai.color.head : ai.color.body;
+            ctx.shadowColor = index === 0 ? ai.color.head : ai.color.body;
+            ctx.shadowBlur = index === 0 ? 8 : 4;
+            ctx.fillRect(
+                segment.x * gridSize + 1,
+                segment.y * gridSize + 1,
+                gridSize - 2,
+                gridSize - 2
+            );
+        });
+    });
+
+    // Draw point drops as golden coins
+    pointDrops.forEach(p => {
+        const cx = p.x * gridSize + gridSize / 2;
+        const cy = p.y * gridSize + gridSize / 2;
+        ctx.fillStyle = '#ffd700';
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(cx, cy, gridSize / 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowColor = 'transparent';
+        ctx.strokeStyle = '#ffcc33';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, gridSize / 3 - 2, 0, Math.PI * 2);
+        ctx.stroke();
     });
 
     ctx.fillStyle = '#00ff00';

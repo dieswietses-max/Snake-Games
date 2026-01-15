@@ -31,6 +31,26 @@
             <button id="resetBtn">Reset Scores</button>
             <button id="pauseBtn">Pause</button>
         </div>
+        <div class="powerups" style="font-size: 0.9em; color: #dfe6ff; margin-bottom: 10px; text-align: center; display:flex; flex-direction:column; gap:6px; align-items:center;">
+            <div class="legend" style="opacity:0.9;">
+                <strong>Power-ups:</strong>
+                <span style="margin-left:8px;">
+                    <span style="display:inline-block; width:10px; height:10px; background:#ff8c00; margin-right:6px;"></span>Invincibility (orange)
+                </span>
+                <span style="margin-left:12px;">
+                    <span style="display:inline-block; width:10px; height:10px; background:#ff1493; margin-right:6px;"></span>Magnet (pink)
+                </span>
+                <span style="margin-left:12px;">
+                    <span style="display:inline-block; width:10px; height:10px; background:#7fff00; margin-right:6px;"></span>Ghost (lime)
+                </span>
+                <span style="margin-left:12px;">
+                    <span style="display:inline-block; width:10px; height:10px; background:#b388ff; margin-right:6px;"></span>Portal (purple)
+                </span>
+            </div>
+            <div class="active" style="color:#b8c5ff;">
+                Active — Green: <span id="activeGreen">None</span> | Red: <span id="activeRed">None</span>
+            </div>
+        </div>
         <div class="info">
             <div class="score-left">Red Wins: <span id="scoreRed">0</span></div>
             <div class="score-center">
